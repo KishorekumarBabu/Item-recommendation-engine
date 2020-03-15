@@ -1,3 +1,4 @@
+const _ = require('lodash');
 const express = require('express');
 const path = require('path');
 const bodyParser = require('body-parser');
@@ -13,6 +14,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 function deleteAll(tx) {
   return tx.run(
     `MATCH (n) DETACH DELETE n`
+  );
+}
+
+function getOrdersCount(tx) {
+  return tx.run(
+    `MATCH (o:Order) RETURN count(o)`
   );
 }
 
@@ -39,9 +46,14 @@ function itemsOrderedTogether(tx) {
 }
 
 async function getRecommendedItems(req, res) {
-  // const driver = neo4j.driver('bolt://localhost', neo4j.auth.basic('neo4j', 'kishore12'));
-  const driver = neo4j.driver('bolt://54.90.11.116:34259', neo4j.auth.basic('neo4j', 'rope-inches-movements'));
-  let { numRecommendations = 5, thresholdPercent = 0, orderJsonPath, isRemotePath = false } = req.body;
+  const driver = neo4j.driver('bolt://localhost', neo4j.auth.basic('neo4j', 'kishore12'));
+  // const driver = neo4j.driver('bolt://54.90.11.116:34259', neo4j.auth.basic('neo4j', 'rope-inches-movements'));
+  let { numRecommendations = 5, 
+        thresholdPercent = 0, 
+        isRemotePath = false, 
+        minOrderCount = 1000,
+        minItemOrderedCount = 0,
+        orderJsonPath } = req.body;
   const session = driver.session();
 
   try {
@@ -63,23 +75,29 @@ async function getRecommendedItems(req, res) {
       await session.writeTransaction(tx => itemsOrderedTogether(tx));
     }
 
-    const result = await session.readTransaction(tx =>
-      tx.run(`MATCH (item:Item)-[:ORDERED]-(o:Order) 
-              WITH DISTINCT item as item1, count(item) as total
-              MATCH (item1)-[:ORDERED_TOGETHER]-(item2:Item)
-              WITH 
-                item1.itemId as itemId1,
-                item2.itemId as itemId2,
-                100.0 * count(item1)/total AS approximatePercent
-              
-              WITH itemId2 as recommendedItem, itemId1
-              WHERE approximatePercent > ${thresholdPercent}
-              RETURN itemId1, collect(recommendedItem)[..${numRecommendations}]`
-      ));
+    const orderCountResult = await session.readTransaction(tx => getOrdersCount(tx));
 
-    const recommendedItems = result.records.reduce((recommendedItem, record) => (recommendedItem[record._fields[0]] = record._fields[1], recommendedItem), {});
+    if(_.get(orderCountResult, 'records[0]._fields[0].low', 0) > minOrderCount) {
+      const result = await session.readTransaction(tx =>
+        tx.run(`MATCH (item:Item)-[:ORDERED]-(o:Order) 
+                WITH DISTINCT item as item1, count(item) as noOfItemOrdered
+                MATCH (item1)-[:ORDERED_TOGETHER]-(item2:Item)
+                WITH 
+                  item1.itemId as itemId1,
+                  item2.itemId as itemId2,
+                  100.0 * count(item1)/noOfItemOrdered AS approximatePercent,
+                  noOfItemOrdered
+                
+                WITH itemId2 as recommendedItem, itemId1
+                WHERE approximatePercent > ${thresholdPercent} AND noOfItemOrdered > ${minItemOrderedCount}
+                RETURN itemId1, collect(recommendedItem)[..${numRecommendations}]`
+        ));
 
-    res.send(recommendedItems);
+      const recommendedItems = result.records.reduce((recommendedItem, record) => (recommendedItem[record._fields[0]] = record._fields[1], recommendedItem), {});
+      res.send(recommendedItems);
+    } else {
+      res.send({message: `Order count must be greater ${minOrderCount}`});
+    }
   } catch (error) {
     console.log(`Query exceution failed. ${error}`);
     res.send({ error: error });
