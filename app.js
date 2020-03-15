@@ -82,14 +82,15 @@ async function getRecommendedItems(req, res) {
         tx.run(`MATCH (item:Item)-[:ORDERED]-(o:Order) 
                 WITH DISTINCT item as item1, count(item) as noOfItemOrdered
                 MATCH (item1)-[:ORDERED_TOGETHER]-(item2:Item)
-                WITH 
+                WITH
                   item1.itemId as itemId1,
                   item2.itemId as itemId2,
                   100.0 * count(item1)/noOfItemOrdered AS approximatePercent,
                   noOfItemOrdered
-                
-                WITH itemId2 as recommendedItem, itemId1
+                  
                 WHERE approximatePercent > ${thresholdPercent} AND noOfItemOrdered > ${minItemOrderedCount}
+                WITH itemId2 AS recommendedItem, approximatePercent, itemId1
+                ORDER BY approximatePercent DESC
                 RETURN itemId1, collect(recommendedItem)[..${numRecommendations}]`
         ));
 
