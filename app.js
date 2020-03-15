@@ -41,12 +41,19 @@ function itemsOrderedTogether(tx) {
 async function getRecommendedItems(req, res) {
   // const driver = neo4j.driver('bolt://localhost', neo4j.auth.basic('neo4j', 'kishore12'));
   const driver = neo4j.driver('bolt://54.90.11.116:34259', neo4j.auth.basic('neo4j', 'rope-inches-movements'));
-
+  let { numRecommendations = 5, thresholdPercent = 0, orderJsonPath, isRemotePath = false } = req.body;
   const session = driver.session();
-  const { numRecommendations = 5, thresholdPercent = 0, orderJsonPath, isRemotePath = false } = req.body;
 
   try {
-    if(orderJsonPath) {
+    await driver.verifyConnectivity();
+    console.log('Driver created');
+  } catch (error) {
+    console.log(`connectivity verification failed. ${error}`);
+    res.send({ error: error });
+  }
+
+  try {
+    if (orderJsonPath) {
       orderJsonPath = isRemotePath ? orderJsonPath : `file:${orderJsonPath}`;
 
       await session.writeTransaction(tx => deleteAll(tx));
@@ -55,7 +62,7 @@ async function getRecommendedItems(req, res) {
 
       await session.writeTransaction(tx => itemsOrderedTogether(tx));
     }
-    
+
     const result = await session.readTransaction(tx =>
       tx.run(`MATCH (item:Item)-[:ORDERED]-(o:Order) 
               WITH DISTINCT item as item1, count(item) as total
@@ -75,7 +82,7 @@ async function getRecommendedItems(req, res) {
     res.send(recommendedItems);
   } catch (error) {
     console.log(`Query exceution failed. ${error}`);
-    res.send(error);
+    res.send({ error: error });
   } finally {
     await session.close();
   }
